@@ -1,0 +1,141 @@
+# Global policy — applies in every environment, never overridden by an
+# environment-specific file (docs/policy-model.md #3). These are core
+# unconditional blocks designed to protect Skydropx infrastructure.
+#
+# NOT listed here on purpose: SQL DROP/TRUNCATE/DELETE-without-WHERE. Those
+# already resolve to BLOCK in every environment as an emergent property of
+# the Risk Engine's blast-radius factor (see core/risk.py), not a hardcoded
+# rule — that's the unified policy design principles actually paying off. See docs/policy-model.md #8.
+
+rules:
+  - id: global.terraform.destroy
+    domain: terraform
+    match:
+      resource_type: destroy
+    decision: block
+    reason: >-
+      terraform destroy is always blocked. Destruction requires manual peer
+      review, backup verification, and explicit approval from the
+      infrastructure team. Run 'terraform plan -destroy' to preview instead.
+
+  - id: global.terraform.force_unlock
+    domain: terraform
+    match:
+      resource_type: force-unlock
+    decision: block
+    reason: "terraform force-unlock is always blocked — state locks exist for a reason."
+
+  - id: global.k8s.delete
+    domain: kubernetes
+    match:
+      verb: delete
+    decision: block
+    reason: "kubectl delete is always blocked to prevent accidental service disruption."
+
+  - id: global.k8s.drain
+    domain: kubernetes
+    match:
+      verb: drain
+    decision: block
+    reason: "Node drain is always blocked — node management goes through the platform team."
+
+  - id: global.k8s.cordon
+    domain: kubernetes
+    match:
+      verb: cordon
+    decision: block
+    reason: "Node cordon is always blocked — node management goes through the platform team."
+
+  - id: global.k8s.taint
+    domain: kubernetes
+    match:
+      verb: taint
+    decision: block
+    reason: "Node taint is always blocked — node management goes through the platform team."
+
+  - id: global.git.force_push
+    domain: git
+    match:
+      resource_type: force_push
+    decision: block
+    reason: >-
+      Force push rewrites remote history and can cause data loss for other
+      contributors. Use --force-with-lease and coordinate with the team, or
+      perform it manually outside the agent.
+
+  - id: global.git.protected_branch_push
+    domain: git
+    match:
+      resource_type: protected_branch_push
+    decision: block
+    reason: "Direct push to a protected branch is blocked — use a feature branch and a pull request."
+
+  - id: global.git.hard_reset
+    domain: git
+    match:
+      resource_type: hard_reset
+    decision: block
+    reason: "git reset --hard discards uncommitted changes permanently. Use 'git stash' instead."
+
+  - id: global.git.clean_force
+    domain: git
+    match:
+      resource_type: clean_force
+    decision: block
+    reason: "git clean -f permanently removes untracked files. Use 'git clean -n' to preview first."
+
+  - id: global.git.no_verify
+    domain: git
+    match:
+      resource_type: no_verify
+    decision: block
+    reason: "--no-verify bypasses hooks that enforce quality and security standards. Fix the underlying failure instead."
+
+  - id: global.git.delete_remote_branch
+    domain: git
+    match:
+      resource_type: delete_remote_branch
+    decision: block
+    reason: "Delete remote branches through the Git hosting UI after the PR is merged, not from the agent."
+
+  - id: global.redis.flushall
+    domain: redis
+    match:
+      resource_type: flushall
+    decision: block
+    reason: "FLUSHALL destroys all data in the Redis instance and is always blocked, regardless of environment."
+
+  - id: global.redis.flushdb
+    domain: redis
+    match:
+      resource_type: flushdb
+    decision: block
+    reason: "FLUSHDB destroys all data in the current Redis database and is always blocked, regardless of environment."
+
+  - id: global.mongodb.drop_database
+    domain: mongodb
+    match:
+      resource_type: dropdatabase
+    decision: block
+    reason: "db.dropDatabase() destroys the entire database and is always blocked, regardless of environment."
+
+  - id: global.gcp.destructive
+    domain: gcp
+    match:
+      operation: destructive
+    decision: block
+    reason: >-
+      GCP delete/destroy operations are always blocked, regardless of
+      environment. Deleting GCP resources is irreversible — use the GCP
+      Console with appropriate approval.
+
+  - id: global.aws.destructive
+    domain: aws
+    match:
+      operation: destructive
+    decision: block
+    reason: >-
+      AWS delete/terminate/detach/revoke operations are always blocked,
+      regardless of environment (ported from infra-guard.sh's
+      unconditional AWS destructive-op check). Use the AWS Console with
+      appropriate approval.

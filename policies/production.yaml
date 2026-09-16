@@ -1,0 +1,11 @@
+# Production — base matrix gives READ=allow, CHANGE=ask, DESTRUCTIVE=block
+# (core/policy.py::_BASE_MATRIX).
+#
+# Note on `kubectl exec`: any `kubectl exec` is classified as DESTRUCTIVE, so it
+# is blocked here (and in qa/staging too, via the same base matrix row) —
+# a deliberate, documented generalization, not an oversight. If a narrower
+# behavior is wanted (e.g. exec allowed on a non-prod namespace even while
+# CLAUDE_ENV=production), add an explicit rule here keyed on the `namespace`
+# field once namespace-aware matching is needed.
+
+rules: []

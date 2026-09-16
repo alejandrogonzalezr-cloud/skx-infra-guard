@@ -1,0 +1,4 @@
+# QA — base matrix gives READ=allow, CHANGE=ask, DESTRUCTIVE=block
+# (core/policy.py::_BASE_MATRIX). No environment-specific overrides yet.
+
+rules: []

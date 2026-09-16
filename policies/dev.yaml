@@ -1,0 +1,4 @@
+# Dev — base matrix gives READ=allow, CHANGE=ask, DESTRUCTIVE=ask
+# (core/policy.py::_BASE_MATRIX). No environment-specific overrides yet.
+
+rules: []

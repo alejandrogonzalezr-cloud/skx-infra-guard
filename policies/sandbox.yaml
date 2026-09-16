@@ -1,0 +1,13 @@
+# Sandbox — most permissive tier, but NOT unlimited (docs/policy-model.md #2).
+# The base decision matrix already gives sandbox: READ=allow, CHANGE=allow,
+# DESTRUCTIVE=ask (core/policy.py::_BASE_MATRIX). The global.yaml rules
+# above still apply unconditionally (kubectl delete, terraform destroy,
+# force push, etc. are blocked here too).
+#
+# The "sandbox reaching into production" escalation (docs/threat-model.md
+# #10) is NOT a rule here — it's handled by the Risk Engine's
+# touches_production_from_elsewhere factor (core/risk.py), which forces at
+# least HIGH risk regardless of the tier the command was issued from. No
+# environment-specific overrides needed yet beyond that.
+
+rules: []
