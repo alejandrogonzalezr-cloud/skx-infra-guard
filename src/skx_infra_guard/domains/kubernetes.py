@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from skx_infra_guard.core.context import RequestContext, classify_resource_tier
-from skx_infra_guard.core.decision import EnvironmentTier, OperationClass, Verdict
+from skx_infra_guard.core.context import RequestContext, touches_production_from_elsewhere
+from skx_infra_guard.core.decision import OperationClass, Verdict
 from skx_infra_guard.core.policy import PolicyEngine
 from skx_infra_guard.core.risk import RiskFactors, combine
 from skx_infra_guard.parsers import kubernetes as kubectl_parser
@@ -15,19 +15,11 @@ DOMAIN = "kubernetes"
 # políticas específicas"). `get`/`describe` stays a normal read.
 _RBAC_RESOURCE_TYPES = {"role", "rolebinding", "clusterrole", "clusterrolebinding"}
 
-
-def _touches_production_from_elsewhere(namespace: str | None, ambient: EnvironmentTier) -> bool:
-    """Real Skydropx topology (confirmed 2026-09-15 review): staging is a
-    `stg-`-prefixed namespace living in the SAME project/cluster as
-    production, not a separate one — so this can't rely on project/account
-    env vars alone. If the session's ambient tier isn't production but the
-    namespace name itself reads as production, that's exactly the sandbox
-    (or dev/staging)-reaching-into-prod case docs/threat-model.md #10 warns
-    about, regardless of what CLAUDE_ENV happens to be set to.
-    """
-    if ambient == EnvironmentTier.PRODUCTION or not namespace:
-        return False
-    return classify_resource_tier(namespace) == EnvironmentTier.PRODUCTION
+# Real Skydropx topology (confirmed 2026-09-15 review): staging is a
+# `stg-`-prefixed namespace living in the SAME project/cluster as
+# production, not a separate one — so this can't rely on project/account
+# env vars alone. The namespace name itself is the resource hint passed to
+# the shared core.context.touches_production_from_elsewhere() below.
 
 
 def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict | None:
@@ -51,7 +43,7 @@ def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict
         touches_secrets=parsed.exposes_secret_value,
         touches_iam=touches_rbac,
         data_sensitivity="credential" if parsed.exposes_secret_value else "public",
-        touches_production_from_elsewhere=_touches_production_from_elsewhere(
+        touches_production_from_elsewhere=touches_production_from_elsewhere(
             parsed.namespace, ctx.environment
         ),
     )

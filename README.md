@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python Version">
-  <img src="https://img.shields.io/badge/Tests-194%20Passed-success.svg" alt="Tests Status">
+  <img src="https://img.shields.io/badge/Tests-224%20Passed-success.svg" alt="Tests Status">
   <img src="https://img.shields.io/badge/License-Proprietary%20%7C%20Internal%20Only-red.svg" alt="License Status">
   <img src="https://img.shields.io/badge/Code%20Style-Black-000000.svg" alt="Code Style">
 </p>
@@ -37,6 +37,27 @@ It intercepts tools and commands executed by AI agents, analyzing them inside a 
 When an AI agent requests tool execution (e.g., executing a command in the terminal or reading/writing system files), SKX Infra Guard intercepts the request and runs it through a 5-step security verification process to decide whether the command is allowed, blocked, or requires human authorization.
 
 ### Execution Lifecycle Pipeline
+
+```mermaid
+flowchart TD
+    CC["Claude Code"] -->|"stdin JSON / exit code"| Shim["Hook shim (per event)"]
+    Shim --> Normalizer["1 · Command Normalizer<br/><small>unwraps bash -c / eval / pipes / alias</small>"]
+    Normalizer --> Parsers["2 · Domain Parsers<br/><small>GKE / GCP / AWS / Terraform / Helm / SQL / ...</small>"]
+    Parsers --> Risk["3 · Risk Engine<br/><small>Environment × Operation × Blast Radius × Sensitivity</small>"]
+    Risk --> Policy["4 · Policy Engine<br/><small>policies-as-code YAML → verdict</small>"]
+    Policy --> Verdict{"5 · Verdict"}
+
+    Verdict -->|ALLOW| Execution["Immediate, silent execution"]
+    Verdict -->|ASK| Approval["Sentinel Approval Engine<br/><small>valid, non-expired approval?</small>"]
+    Verdict -->|BLOCK| Denied["Aborted with a descriptive reason"]
+
+    Approval -->|yes| Execution
+    Approval -->|no| Denied
+
+    style Denied fill:#e05252,color:#fff
+    style Execution fill:#3fa34d,color:#fff
+    style Approval fill:#d9a441,color:#111
+```
 
 1. **AI Agent Tool Invocation**
    * Triggered by terminal commands, file read/write requests, or external WebFetch calls.
@@ -89,7 +110,7 @@ skx-infra-guard/
 │
 ├── hooks/                   # Lightweight bash shim scripts invoked by Claude Code
 ├── docs/                    # Rich English architecture, threat model, and policy docs
-└── tests/                   # 194 automated unit, integration, and security tests
+└── tests/                   # 224 automated unit, integration, and security tests
 ```
 
 ---
@@ -117,7 +138,7 @@ pip install -e ".[dev]"
 The project maintains a 100% offline security test suite that exercises every wrapper, normalizer, and domain parser against actual obfuscation payloads:
 
 ```sh
-# Execute all 194 unit, integration, and security tests
+# Execute all 224 unit, integration, and security tests
 pytest
 ```
 

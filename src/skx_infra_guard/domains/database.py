@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from skx_infra_guard.core.context import RequestContext
-from skx_infra_guard.core.decision import Verdict
+import shlex
+
+from skx_infra_guard.core.context import RequestContext, touches_production_from_elsewhere
+from skx_infra_guard.core.decision import OperationClass, Verdict
 from skx_infra_guard.core.policy import PolicyEngine
 from skx_infra_guard.core.risk import RiskFactors, combine
 from skx_infra_guard.parsers import shell as shell_parser
@@ -12,6 +14,24 @@ DOMAIN = "database"
 _SQL_TO_SENSITIVITY_DEFAULT = "internal"  # no data catalog wired yet — see
 # docs/skydropx-architecture.md #7.3. Overridable per-table via
 # policies/data-sensitivity.yaml once that catalog exists.
+
+
+def _extract_host(command: str) -> str | None:
+    """Pull the `-h`/`--host` value out of a psql/mysql-style invocation —
+    a more precise resource hint than the whole command text, since SQL
+    payloads can legitimately contain the literal word "production" as
+    ordinary data (e.g. `WHERE environment = 'production'`) without the
+    command actually targeting a production host."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    for flag in ("-h", "--host"):
+        if flag in tokens:
+            idx = tokens.index(flag)
+            if idx + 1 < len(tokens):
+                return tokens[idx + 1]
+    return None
 
 
 def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict | None:
@@ -37,11 +57,19 @@ def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict
         # ever blocking the read itself (policy.py never escalates READ).
         sensitivity = "sensitive"
 
+    # Same sandbox/dev-reaching-into-production escalation kubernetes.py
+    # applies to a namespace argument, generalized here (found only wired
+    # for Kubernetes in the 2026-09 review) — e.g. `psql -h prod-db.internal
+    # -c 'DROP TABLE users;'` run from a sandbox session.
+    touches_prod_elsewhere = worst.operation != OperationClass.READ and touches_production_from_elsewhere(
+        _extract_host(command), ctx.environment
+    )
     factors = RiskFactors(
         operation=worst.operation,
         environment=ctx.environment,
         blast_radius="cluster_or_database" if unfiltered else "group",
         data_sensitivity=sensitivity,
+        touches_production_from_elsewhere=touches_prod_elsewhere,
     )
     risk = combine(factors)
 

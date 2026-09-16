@@ -14,7 +14,7 @@ from skx_infra_guard.core.decision import Decision, EnvironmentTier, RiskLevel, 
 
 DOMAIN = "file"
 
-_PROTECTED_WRITE_PATTERNS = [
+_SYSTEM_PATH_WRITE_PATTERNS = [
     r"^/etc/",
     r"^/usr/bin/",
     r"^/usr/sbin/",
@@ -26,68 +26,90 @@ _PROTECTED_WRITE_PATTERNS = [
     r"^/proc/",
     r"^/dev/",
     r"^/var/log/",
-    r"\.ssh/(authorized_keys|id_rsa|id_ed25519|id_ecdsa|id_dsa|known_hosts|config)$",
-    r"\.ssh/.*\.(pub|pem|key)$",
-    r"\.aws/credentials$",
-    r"\.aws/config$",
-    r"\.kube/config$",
-    r"\.docker/config\.json$",
-    r"\.npmrc$",
-    r"\.pypirc$",
-    r"\.netrc$",
-    r"\.git-credentials$",
-    r"secrets\.(json|yaml|yml|env)$",
-    r"credentials\.(json|yaml|yml)$",
-    r"\.(pem|p12|pfx|key)$",
-    r"\.tfstate(\.backup)?$",  # ported from infra-guard.sh — state must only
+]
+
+# Canonical credential/secret file pattern BODIES (no anchor), shared by
+# write-protection (below), sensitive-read detection (SENSITIVE_READ_PATTERNS
+# below), and domains/shell_safety.py's own cat/head/etc. sensitive-read
+# check, which imports this instead of keeping its own copy. Previously each
+# of the three lists was maintained independently and had already drifted —
+# the read list was missing .tfstate, .ssh/known_hosts, .ssh/config, and the
+# .ssh/*.pub|.pem|.key wildcard that the write list already had (found in
+# the 2026-09 review). One body list now, so a fix here can't fail to reach
+# the others. Left unanchored here because the two callers need different
+# anchors: file_guard matches an isolated path (anchor at the end, `$`),
+# shell_safety matches a path substring inside a whole command line (anchor
+# at a word boundary, `\b`).
+CREDENTIAL_FILE_PATTERN_BODIES = [
+    r"\.ssh/(authorized_keys|id_rsa|id_ed25519|id_ecdsa|id_dsa|known_hosts|config)",
+    r"\.ssh/.*\.(pub|pem|key)",
+    r"\.aws/credentials",
+    r"\.aws/config",
+    r"\.kube/config",
+    r"\.docker/config\.json",
+    r"\.npmrc",
+    r"\.pypirc",
+    r"\.netrc",
+    r"\.git-credentials",
+    r"secrets\.(json|yaml|yml|env)",
+    r"credentials\.(json|yaml|yml)",
+    r"\.(pem|p12|pfx|key)",
+    r"\.tfstate(\.backup)?",  # ported from infra-guard.sh — state must only
     # be touched by terraform itself
 ]
 
-_SENSITIVE_READ_PATTERNS = [
+CREDENTIAL_FILE_PATTERNS = [body + r"$" for body in CREDENTIAL_FILE_PATTERN_BODIES]
+
+_PROTECTED_WRITE_PATTERNS = _SYSTEM_PATH_WRITE_PATTERNS + CREDENTIAL_FILE_PATTERNS
+
+# Read-only extras: meaningless as WRITE protections (nothing "writes" its
+# own /proc/self/environ or /etc/shadow through this path), but reading them
+# exposes secrets the same way the credential files above do.
+_READ_ONLY_EXTRA_PATTERNS = [
     r"\.env(\.local|\.production|\.staging|\.test)?$",
     r"/etc/shadow$",
     r"/etc/gshadow$",
     r"/etc/master\.passwd$",
-    r"\.ssh/id_(rsa|ed25519|ecdsa|dsa)$",
-    r"\.ssh/authorized_keys$",
-    r"\.aws/credentials$",
-    r"\.kube/config$",
-    r"\.docker/config\.json$",
-    r"\.npmrc$",
-    r"\.pypirc$",
-    r"\.netrc$",
-    r"\.git-credentials$",
     r"/proc/self/environ$",
     r"/proc/\d+/environ$",
-    r"\.(pem|p12|pfx|key)$",
-    r"secrets\.json$",
-    r"credentials\.json$",
 ]
 
-
-def _expand(path: str) -> str:
-    return os.path.expanduser(path)
+SENSITIVE_READ_PATTERNS = CREDENTIAL_FILE_PATTERNS + _READ_ONLY_EXTRA_PATTERNS
 
 
-def check_write(path: str) -> str | None:
-    expanded = _expand(path)
+def _resolve(path: str, cwd: str | None) -> str:
+    """Expand `~` and resolve against the tool call's cwd before matching.
+    Without this, a relative path like `../../../../etc/passwd` never starts
+    with the literal string `/etc/` and slides past every anchored pattern
+    below untouched (found in the 2026-09 review). `normpath` — not
+    `realpath` — is enough to collapse `../` lexically without requiring the
+    path to actually exist.
+    """
+    expanded = os.path.expanduser(path)
+    if cwd and not os.path.isabs(expanded):
+        expanded = os.path.join(cwd, expanded)
+    return os.path.normpath(expanded)
+
+
+def check_write(path: str, cwd: str | None = None) -> str | None:
+    resolved = _resolve(path, cwd)
     for pattern in _PROTECTED_WRITE_PATTERNS:
-        if re.search(pattern, expanded, re.IGNORECASE):
+        if re.search(pattern, resolved, re.IGNORECASE):
             return pattern
     return None
 
 
-def check_read(path: str) -> str | None:
-    expanded = _expand(path)
-    for pattern in _SENSITIVE_READ_PATTERNS:
-        if re.search(pattern, expanded, re.IGNORECASE):
+def check_read(path: str, cwd: str | None = None) -> str | None:
+    resolved = _resolve(path, cwd)
+    for pattern in SENSITIVE_READ_PATTERNS:
+        if re.search(pattern, resolved, re.IGNORECASE):
             return pattern
     return None
 
 
-def evaluate_write(paths: list[str], environment: EnvironmentTier) -> Verdict | None:
+def evaluate_write(paths: list[str], environment: EnvironmentTier, cwd: str | None = None) -> Verdict | None:
     for path in paths:
-        pattern = check_write(path)
+        pattern = check_write(path, cwd)
         if pattern is not None:
             return Verdict(
                 decision=Decision.BLOCK,
@@ -101,9 +123,9 @@ def evaluate_write(paths: list[str], environment: EnvironmentTier) -> Verdict | 
     return None
 
 
-def evaluate_read(paths: list[str], environment: EnvironmentTier) -> Verdict | None:
+def evaluate_read(paths: list[str], environment: EnvironmentTier, cwd: str | None = None) -> Verdict | None:
     for path in paths:
-        pattern = check_read(path)
+        pattern = check_read(path, cwd)
         if pattern is not None:
             return Verdict(
                 decision=Decision.BLOCK,

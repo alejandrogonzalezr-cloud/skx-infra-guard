@@ -34,12 +34,27 @@ _MAX_UNWRAP_DEPTH = 8
 # by simply skipping one token.
 _XARGS_VALUE_FLAGS = {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"}
 
+# `PGPASSWORD=x psql ...` / `AWS_PROFILE=prod-admin aws ...` — one or more
+# leading env-var assignments. Every domain parser's is_X_command() is
+# anchored with `^\s*<binary>\s`, so a prefix like this makes the command
+# match NO domain at all and fall through to a silent ALLOW. Stripped here,
+# once, so every downstream parser keeps working unmodified.
+_ENV_ASSIGNMENT_PREFIX_RE = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S*)\s+)+"
+)
+
+
+def _strip_env_prefix(text: str) -> str:
+    return _ENV_ASSIGNMENT_PREFIX_RE.sub("", text, count=1)
+
+
 @dataclass(frozen=True)
 class EffectiveCommand:
     """One command string that should be classified independently."""
 
     text: str
     unwrapped_from: tuple[str, ...] = ()  # chain of wrappers peeled to get here
+    raw_text: str = ""  # text before env-prefix stripping, kept for audit/display
 
 
 def _split_top_level(command: str) -> list[str]:
@@ -66,7 +81,16 @@ def _split_top_level(command: str) -> list[str]:
         ch = command[i]
 
         if quote_char:
-            if ch == "\\" and i + 1 < n:
+            # POSIX: backslash has no special meaning inside single quotes —
+            # only double quotes support escaping. Treating `\` as an escape
+            # inside a single-quoted span (as this used to, unconditionally)
+            # let a closing `'` hide behind a preceding backslash, so real
+            # bash would end the quote right there while this parser kept
+            # scanning as if it were still open — a second, unrelated `;`
+            # further down the string then never got treated as a split
+            # point (found 2026-09-16: `kubectl get pods '\'; kubectl delete
+            # namespace production` evaded classification entirely).
+            if quote_char == '"' and ch == "\\" and i + 1 < n:
                 i += 2
                 continue
             if ch == quote_char:
@@ -225,15 +249,20 @@ def normalize(command: str) -> list[EffectiveCommand]:
 
     effective: list[EffectiveCommand] = []
     for piece in pieces:
-        text = piece.strip()
-        if not text:
+        raw = piece.strip()
+        if not raw:
             continue
-        effective.append(EffectiveCommand(text=text, unwrapped_from=tuple(wrapper_chain)))
+        text = _strip_env_prefix(raw)
+        effective.append(EffectiveCommand(text=text, unwrapped_from=tuple(wrapper_chain), raw_text=raw))
 
         xargs_template = _extract_xargs_template(text)
         if xargs_template:
             effective.append(
-                EffectiveCommand(text=xargs_template, unwrapped_from=tuple(wrapper_chain) + ("xargs",))
+                EffectiveCommand(
+                    text=xargs_template,
+                    unwrapped_from=tuple(wrapper_chain) + ("xargs",),
+                    raw_text=xargs_template,
+                )
             )
 
     return effective

@@ -49,3 +49,26 @@ def test_non_aws_command_returns_none():
 
 def test_bare_service_no_verb_fails_safe_to_change():
     assert a.parse("aws configure").operation == OperationClass.CHANGE
+
+
+def test_s3_rm_is_destructive():
+    # `aws s3 rm` doesn't follow the hyphenated-verb grammar (delete-,
+    # terminate-, ...) every other service uses, so it used to fall to the
+    # generic "unknown verb shape" CHANGE fail-safe instead of DESTRUCTIVE.
+    parsed = a.parse("aws s3 rm s3://prod-uploads/ --recursive")
+    assert parsed.operation == OperationClass.DESTRUCTIVE
+
+
+def test_s3_sync_with_delete_flag_is_destructive():
+    parsed = a.parse("aws s3 sync ./local s3://prod-bucket --delete")
+    assert parsed.operation == OperationClass.DESTRUCTIVE
+
+
+def test_s3_sync_without_delete_flag_is_ordinary_change():
+    parsed = a.parse("aws s3 sync ./local s3://prod-bucket")
+    assert parsed.operation == OperationClass.CHANGE
+
+
+def test_s3_mv_is_destructive():
+    parsed = a.parse("aws s3 mv ./local-file s3://prod-bucket/key")
+    assert parsed.operation == OperationClass.DESTRUCTIVE

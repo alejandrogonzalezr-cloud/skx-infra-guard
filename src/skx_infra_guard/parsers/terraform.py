@@ -110,6 +110,15 @@ def parse(command: str) -> TerraformCommand | None:
         subcommand = f"state:{sub2}" if sub2 else "state"
     elif subcommand in _DESTRUCTIVE_SUBCOMMANDS:
         operation = OperationClass.DESTRUCTIVE
+    elif subcommand == "apply" and any(
+        tok in ("-destroy", "--destroy") or tok.startswith(("-destroy=", "--destroy="))
+        for tok in rest[1:]
+    ):
+        # `terraform apply -destroy` is functionally `terraform destroy` —
+        # classifying it by subcommand alone (as CHANGE) let a real
+        # destructive apply through at the wrong policy tier (found in the
+        # 2026-09 review).
+        operation = OperationClass.DESTRUCTIVE
     elif subcommand in _CHANGE_SUBCOMMANDS:
         operation = OperationClass.CHANGE
     elif subcommand in _READ_SUBCOMMANDS:

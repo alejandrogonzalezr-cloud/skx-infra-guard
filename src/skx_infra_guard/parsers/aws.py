@@ -81,6 +81,20 @@ def parse(command: str) -> AwsCommand | None:
     if service == "iam" and verb and verb.startswith(_IAM_MUTATION_PREFIXES):
         return AwsCommand(service=service, verb=verb, operation=OperationClass.SECURITY_CRITICAL, touches_iam=True)
 
+    # `aws s3` high-level commands don't follow the hyphenated-verb grammar
+    # every other service uses (`rm`/`sync`/`mv` are plain words), so they
+    # fell into the generic "unknown verb shape" CHANGE fail-safe below
+    # instead of being recognized as destructive — `aws s3 rm --recursive`
+    # or `aws s3 sync --delete` can wipe an entire bucket (found in the
+    # 2026-09 review).
+    if service == "s3":
+        if verb == "rm":
+            return AwsCommand(service=service, verb=verb, operation=OperationClass.DESTRUCTIVE, touches_iam=False)
+        if verb == "mv":
+            return AwsCommand(service=service, verb=verb, operation=OperationClass.DESTRUCTIVE, touches_iam=False)
+        if verb == "sync" and "--delete" in tokens:
+            return AwsCommand(service=service, verb=verb, operation=OperationClass.DESTRUCTIVE, touches_iam=False)
+
     if verb is None:
         operation = OperationClass.CHANGE  # fail-safe
     elif verb in _READ_VERBS_EXACT or verb.startswith(_READ_PREFIXES):

@@ -14,9 +14,9 @@ import sys
 from pathlib import Path
 
 from skx_infra_guard.approval.sentinel import SentinelApprovalChannel
-from skx_infra_guard.core.audit import AuditEngine
+from skx_infra_guard.core.audit import AuditEngine, AuditEvent, now_iso
 from skx_infra_guard.core.context import RequestContext, detect_environment
-from skx_infra_guard.core.decision import Decision, EnvironmentTier, Verdict
+from skx_infra_guard.core.decision import Decision, EnvironmentTier, RiskLevel, Verdict
 from skx_infra_guard.core.normalizer import normalize
 from skx_infra_guard.core.policy import PolicyEngine
 from skx_infra_guard.domains import aws, database, file_guard, gcloud, git, helm, kubernetes, mongodb, post_audit, redis, secrets, shell_safety, terraform, web_guard
@@ -137,6 +137,7 @@ def _run_pre_tool_use(payload: dict) -> None:
     audit = AuditEngine(_log_dir())
 
     verdict: Verdict | None = None
+    handled = True
 
     if tool_name == "Bash":
         command = str(tool_input.get("command") or "")
@@ -145,16 +146,43 @@ def _run_pre_tool_use(payload: dict) -> None:
     elif tool_name in ("Write", "Edit", "MultiEdit"):
         environment = detect_environment("", cwd=cwd)
         paths = _extract_paths(tool_input)
-        verdict = file_guard.evaluate_write(paths, environment)
+        verdict = file_guard.evaluate_write(paths, environment, cwd=cwd)
     elif tool_name == "Read":
         environment = detect_environment("", cwd=cwd)
         paths = _extract_paths(tool_input)
-        verdict = file_guard.evaluate_read(paths, environment)
+        verdict = file_guard.evaluate_read(paths, environment, cwd=cwd)
     elif tool_name == "WebFetch":
         environment = detect_environment("", cwd=cwd)
         url = str(tool_input.get("url") or "")
         if url:
             verdict = web_guard.evaluate(url, environment)
+    else:
+        handled = False
+
+    if not handled:
+        # No dedicated branch for this tool_name at all (e.g. an MCP tool
+        # like mcp__docker__exec_command) — falling through to a silent
+        # ALLOW here would mean any tool this dispatcher doesn't explicitly
+        # recognize bypasses every policy/risk check with zero audit trail.
+        # Fall back to the environment tier's default posture instead:
+        # sandbox/dev proceed unattended, anything higher requires approval.
+        environment = detect_environment("", cwd=cwd)
+        fallback_decision = (
+            Decision.ALLOW
+            if environment in (EnvironmentTier.SANDBOX, EnvironmentTier.DEV)
+            else Decision.ASK
+        )
+        verdict = Verdict(
+            decision=fallback_decision,
+            reason=(
+                f"no dedicated policy for tool '{tool_name}'; "
+                f"environment-tier default applied ({environment.value})"
+            ),
+            risk=RiskLevel.MEDIUM,
+            domain="unknown_tool",
+            rule_id="cli.unrecognized_tool_default",
+            environment=environment,
+        )
 
     if verdict is None:
         emit_allow()
@@ -196,8 +224,6 @@ def _run_post_tool_use(payload: dict) -> None:
 
 
 def _credential_event(credential_type: str, tool: str, session_id: str):
-    from skx_infra_guard.core.audit import AuditEvent, now_iso
-
     return AuditEvent(
         timestamp=now_iso(),
         event="alert",
@@ -210,12 +236,58 @@ def _credential_event(credential_type: str, tool: str, session_id: str):
     )
 
 
+def _fail_closed(hook_event_name: str, exc: BaseException, *, session_id: str = "unknown", tool_name: str = "unknown") -> None:
+    """Any unhandled exception on the evaluation path (malformed hook input,
+    a bad policy YAML, AuditEngine itself failing to create its log
+    directory, ...) must resolve to an explicit deny, never a crash — a
+    non-0/2 exit defaults to an implicit ALLOW in the Claude Code hook
+    platform (see protocol.py), which would silently let through exactly
+    the kind of command this tool exists to catch. Matches the "fail-closed
+    sandboxed pipeline" design already documented in README.md.
+    """
+    reason = f"skx-infra-guard failed closed after an internal error: {exc.__class__.__name__}: {exc}"
+    print(f"skx-guard: {reason}", file=sys.stderr)
+    try:
+        # Best-effort only: if AuditEngine itself is what raised (e.g. its
+        # log-dir mkdir failed), logging the failure would just raise again.
+        AuditEngine(_log_dir()).log(
+            AuditEvent(
+                timestamp=now_iso(),
+                event="error",
+                tool=tool_name,
+                status="block",
+                detail=reason,
+                environment="unknown",
+                session=session_id,
+                domain="cli",
+            )
+        )
+    except Exception:
+        pass
+    emit_deny(hook_event_name, reason)
+
+
 def _cmd_pre_tool_use(_args: argparse.Namespace) -> None:
-    _run_pre_tool_use(read_hook_input())
+    payload: dict = {}
+    try:
+        payload = read_hook_input()
+        _run_pre_tool_use(payload)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _fail_closed("PreToolUse", exc, session_id=_session_id(payload), tool_name=_tool_name(payload))
 
 
 def _cmd_post_tool_use(_args: argparse.Namespace) -> None:
-    _run_post_tool_use(read_hook_input())
+    try:
+        _run_post_tool_use(read_hook_input())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # PostToolUse can never block (the tool call already completed) —
+        # there's no fail-closed decision to make, just don't crash noisily.
+        print(f"skx-guard: post-tool-use failed (non-blocking): {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        emit_allow()
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> None:

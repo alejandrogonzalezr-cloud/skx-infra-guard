@@ -8,35 +8,27 @@ This document maps the complete requirements of Skydropx (41 sections) into conc
 
 Integration with Claude Code (stdin JSON → exit 0/2 + blocking JSON, per-tool matchers, registered in `settings.json`) is maintained using optimized wrapper commands that run as life-cycle hooks of the agent.
 
-```
-                         CLAUDE CODE
-                              |
-                    (stdin JSON / exit code)
-                              v
-                     hook shim (per event)
-                              |
-                              v
-                  ┌───────────────────────────┐
-                  │      SKX INFRA GUARD       │
-                  │                            │
-                  │  Command Normalizer        │  ← unwraps bash -c/eval/pipes/alias
-                  │  Context Detector          │  ← environment (5 tiers) + user vs agent
-                  │  Domain Parsers            │  ← kubectl/terraform/gcloud/sql/redis/...
-                  │  Risk Engine               │  ← factors → level (LOW..CRITICAL)
-                  │  Policy Engine             │  ← policies-as-code YAML → decision
-                  │  Audit Engine              │  ← structured event logging, always
-                  │  Approval Engine           │  ← only if the decision is ASK
-                  └─────────────┬──────────────┘
-                                v
-                    ┌───────────┼───────────┐
-                    v           v           v
-                  ALLOW        ASK        BLOCK
-                                |
-                                v
-                        Approval Flow
-                                |
-                                v
-                          EXECUTION
+```mermaid
+flowchart TD
+    CC["Claude Code"] -->|"stdin JSON / exit code"| Shim["Hook shim (per event)"]
+    Shim --> Normalizer["Command Normalizer<br/><small>unwraps bash -c / eval / pipes / alias</small>"]
+    Normalizer --> Context["Context Detector<br/><small>environment (5 tiers) + user vs. agent</small>"]
+    Context --> Parsers["Domain Parsers<br/><small>kubectl / terraform / gcloud / sql / redis / ...</small>"]
+    Parsers --> Risk["Risk Engine<br/><small>factors → level (LOW..CRITICAL)</small>"]
+    Risk --> Policy["Policy Engine<br/><small>policies-as-code YAML → decision</small>"]
+    Policy --> Audit["Audit Engine<br/><small>structured event logging, always</small>"]
+    Audit --> Verdict{"Decision"}
+
+    Verdict -->|ALLOW| Execution["EXECUTION"]
+    Verdict -->|ASK| Approval["Approval Engine<br/><small>sentinel-based, TTL-checked</small>"]
+    Verdict -->|BLOCK| Denied["Aborted, reason returned"]
+
+    Approval -->|approved| Execution
+    Approval -->|denied / expired| Denied
+
+    style Denied fill:#e05252,color:#fff
+    style Execution fill:#3fa34d,color:#fff
+    style Approval fill:#d9a441,color:#111
 ```
 
 ---

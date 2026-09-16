@@ -22,13 +22,15 @@ import sys
 
 
 def read_hook_input() -> dict:
+    """Truncated/malformed stdin must not be swallowed into `{}` — that
+    silently resolves to no tool_name/no verdict downstream, which is an
+    implicit ALLOW with zero audit trail. Let json.JSONDecodeError
+    propagate; cli.py's top-level dispatch catches it the same way it
+    catches any other evaluation-path exception and fails CLOSED instead."""
     raw = sys.stdin.read()
     if not raw.strip():
         return {}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+    return json.loads(raw)
 
 
 def emit_allow() -> None:

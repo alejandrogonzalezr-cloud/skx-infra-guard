@@ -41,6 +41,23 @@ def test_non_terraform_command_returns_none():
     assert tf.parse("kubectl get pods") is None
 
 
+def test_apply_destroy_flag_is_destructive_like_destroy():
+    # `terraform apply -destroy` is functionally `terraform destroy` — it
+    # used to be classified purely by subcommand (apply == CHANGE), letting
+    # a real destructive apply through at the wrong policy tier.
+    parsed = tf.parse("terraform apply -destroy -auto-approve")
+    assert parsed.operation == OperationClass.DESTRUCTIVE
+
+
+def test_apply_destroy_equals_flag_is_also_destructive():
+    parsed = tf.parse("terraform apply -destroy=true")
+    assert parsed.operation == OperationClass.DESTRUCTIVE
+
+
+def test_plain_apply_is_still_change_not_destructive():
+    assert tf.parse("terraform apply -auto-approve").operation == OperationClass.CHANGE
+
+
 def test_analyze_plan_output_no_changes():
     summary = tf.analyze_plan_output("No changes. Your infrastructure matches the configuration.")
     assert summary.no_changes is True

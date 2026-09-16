@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass
 
 from skx_infra_guard.core.decision import Decision, EnvironmentTier, RiskLevel, Verdict
+from skx_infra_guard.domains.file_guard import CREDENTIAL_FILE_PATTERN_BODIES
 
 DOMAIN = "shell"
 
@@ -43,25 +44,17 @@ _HIGH_SEVERITY_PATTERNS: list[tuple[str, str, str]] = [
     ("etc_hosts_write", r"(>>|tee)\s*/etc/hosts", "writing to /etc/hosts (DNS hijack)"),
 ]
 
-_SENSITIVE_FILE_PATTERNS = [
+# Credential-file bodies shared with domains/file_guard.py (see there for
+# why this used to be — and no longer is — a second independently
+# maintained copy), anchored here at a word boundary since these match a
+# path substring inside a whole command line rather than an isolated path.
+_SENSITIVE_FILE_PATTERNS = [f"{body}\\b" for body in CREDENTIAL_FILE_PATTERN_BODIES] + [
     r"\.env\.?(local|production|staging|test)?\b",
     r"/etc/shadow\b",
     r"/etc/gshadow\b",
     r"/etc/master\.passwd\b",
-    r"\.ssh/id_(rsa|ed25519|ecdsa|dsa)\b",
-    r"\.ssh/authorized_keys\b",
-    r"\.aws/credentials\b",
-    r"\.kube/config\b",
-    r"\.docker/config\.json\b",
-    r"\.npmrc\b",
-    r"\.pypirc\b",
-    r"\.netrc\b",
-    r"\.git-credentials\b",
     r"/proc/self/environ\b",
     r"/proc/\d+/environ\b",
-    r"\.(pem|p12|pfx|key)\b",
-    r"secrets\.json\b",
-    r"credentials\.json\b",
 ]
 _READ_COMMAND_PREFIX = re.compile(r"^\s*(cat|bat|less|more|head|tail|print|strings)\s")
 

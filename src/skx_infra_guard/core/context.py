@@ -49,6 +49,21 @@ def classify_resource_tier(text: str) -> EnvironmentTier | None:
     return _keyword_tier(text)
 
 
+def touches_production_from_elsewhere(resource_hint: str | None, ambient: EnvironmentTier) -> bool:
+    """True when the ambient session tier isn't production but a resource
+    identifier — a namespace, an RDS/Cloud SQL instance id, a DB host, the
+    raw command text, anything with a name — reads as production by keyword.
+    This is the shared "sandbox/dev reaching into a production resource"
+    primitive (docs/threat-model.md #10). Originally wired into
+    domains/kubernetes.py only; every domain that can name a specific
+    resource should call this the same way rather than inventing its own
+    per-domain escalation heuristic.
+    """
+    if ambient == EnvironmentTier.PRODUCTION or not resource_hint:
+        return False
+    return classify_resource_tier(resource_hint) == EnvironmentTier.PRODUCTION
+
+
 def _keyword_tier(text: str) -> EnvironmentTier | None:
     if _PROD_KEYWORDS.search(text):
         return EnvironmentTier.PRODUCTION

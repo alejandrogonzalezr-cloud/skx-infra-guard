@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from skx_infra_guard.core.context import RequestContext
-from skx_infra_guard.core.decision import Verdict
+from skx_infra_guard.core.context import RequestContext, touches_production_from_elsewhere
+from skx_infra_guard.core.decision import OperationClass, Verdict
 from skx_infra_guard.core.policy import PolicyEngine
 from skx_infra_guard.core.risk import RiskFactors, combine
 from skx_infra_guard.parsers import gcloud as gcloud_parser
@@ -23,6 +23,14 @@ def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict
     # project-wide made a routine `sql instances patch` blow up to CRITICAL
     # for no real reason — only IAM mutation actually earns that).
     blast_radius = "cluster_or_database" if parsed.touches_iam else "group"
+    # Same sandbox/dev-reaching-into-production escalation kubernetes.py
+    # applies to a namespace argument, generalized here (found only wired
+    # for Kubernetes in the 2026-09 review) — e.g. `gcloud sql instances
+    # delete prod-billing` run from a sandbox session. Gated on non-READ for
+    # the same reason as domains/aws.py.
+    touches_prod_elsewhere = parsed.operation != OperationClass.READ and touches_production_from_elsewhere(
+        command, ctx.environment
+    )
     factors = RiskFactors(
         operation=parsed.operation,
         environment=ctx.environment,
@@ -30,6 +38,7 @@ def evaluate(command: str, ctx: RequestContext, engine: PolicyEngine) -> Verdict
         touches_iam=parsed.touches_iam,
         touches_secrets=parsed.touches_secrets,
         data_sensitivity="credential" if parsed.touches_secrets else "public",
+        touches_production_from_elsewhere=touches_prod_elsewhere,
     )
     risk = combine(factors)
 
